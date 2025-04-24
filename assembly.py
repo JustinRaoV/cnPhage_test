@@ -46,7 +46,7 @@ def main():
 
     # 步骤1: fastp质控
     if log < 1:
-        run_fastp(output, args.input1, args.input2, sample1, sample2, threads, sample)
+        run_fastp(args.input1, args.input2, output, sample1, sample2, threads, sample)
         log = 1
         with open(log_path, "w") as f:
             f.write(f"{log}\n")

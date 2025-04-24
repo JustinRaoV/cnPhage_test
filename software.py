@@ -65,8 +65,8 @@ def run_bowtie2(output, threads, sample1, sample2, index_path, sample):
         ]
         try:
             subprocess.run(cmd, check=True)
-            shutil.move(f"{tmp_prefix}.1", input1)
-            shutil.move(f"{tmp_prefix}.2", input2)
+            shutil.move(f"{tmp_prefix}.1", os.path.join(sample_dir, f"{sample1}.fastq"))
+            shutil.move(f"{tmp_prefix}.2", os.path.join(sample_dir, f"{sample2}.fastq"))
         except Exception as e:
             sys.exit(f"bowtie2 failed: {e}")
 
@@ -79,14 +79,13 @@ def run_megahit(output, threads, sample1, sample2, sample):
     assembly_dir = os.path.join(output, "3.assembly", sample)
     if os.path.exists(assembly_dir):
         shutil.rmtree(assembly_dir)
-    os.makedirs(assembly_dir, exist_ok=True)
 
     # 设置k-mer参数
     k_list = "21,29,39,59,79,99,119"
 
     cmd = f"""
-    megahit -1 {output}/2.bowtie2/{sample1}.fq.gz" \
-            -2 {output}/2.bowtie2/{sample2}.fq.gz" \
+    megahit -1 {output}/2.bowtie2/{sample}/{sample1}.fastq \
+            -2 {output}/2.bowtie2/{sample}/{sample2}.fastq \
             -o {assembly_dir} \
             --k-list {k_list} \
             --num-cpu-threads {threads} \
