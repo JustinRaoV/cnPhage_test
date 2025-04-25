@@ -70,6 +70,24 @@ def main():
         with open(log_path, "w") as f:
             f.write(f"{log}\n")
 
+    if log < 4:
+        run_checkv(output, sample, db, threads)
+        log = 4
+        with open(log_path, "w") as f:
+            f.write(f"{log}\n")
+
+    if log < 5:
+        run_dvf(output, sample, db, threads)
+        log = 5
+        with open(log_path, "w") as f:
+            f.write(f"{log}\n")
+
+    if log < 6:
+        run_vibrant(output, sample, db, threads)
+        log = 6
+        with open(log_path, "w") as f:
+            f.write(f"{log}\n")
+
     print("Pipeline completed successfully")
 
 
