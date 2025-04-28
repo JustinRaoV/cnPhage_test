@@ -105,7 +105,7 @@ def run_checkv(output, sample, db, threads):
         shutil.rmtree(checkv_dir)
     os.makedirs(checkv_dir, exist_ok=True)
 
-    # Step 1: 运行CheckV初步筛选
+    # Step 1: 运行CheckV初步筛选 SRR10983056
     cmd = f"""
     checkv end_to_end {input_fasta} {checkv_dir} \
         -d {os.path.join(db, 'checkvdb/checkv-db-v1.0')} \
@@ -236,3 +236,203 @@ def run_vibrant(output, sample, db, threads):
     s1 = subprocess.call(cmd, shell=True)
     if s1 != 0:
         sys.exit(f"DVF failed: {s1}")
+
+
+def run_combine(output, sample, db, threads):
+    # 定义输入文件路径
+    checkv_file = os.path.join(output, "4.checkv", sample, "checkv.fa")
+    dvf_file = os.path.join(output, "5.dvf", sample, "dvf.fasta")
+    vibrant_file = os.path.join(output, "6.vibrant", sample,
+                                "VIBRANT_filtered_contigs",
+                                "VIBRANT_phages_filtered_contigs",
+                                "filtered_contigs.phages_combined.fna")
+
+    # 创建输出目录
+    combine_dir = os.path.join(output, "7.combine", sample)
+    combined_file = os.path.join(combine_dir, "virus_combine.fa")
+
+    # 清空并重建目录
+    if os.path.exists(combine_dir):
+        shutil.rmtree(combine_dir)
+    os.makedirs(combine_dir, exist_ok=True)
+
+    # 合并文件
+    with open(combined_file, 'wb') as f_out:
+        # 依次合并三个文件
+        for input_file in [checkv_file, dvf_file, vibrant_file]:
+            if os.path.exists(input_file):
+                with open(input_file, 'rb') as f_in:
+                    shutil.copyfileobj(f_in, f_out)
+            else:
+                print(f"Warning: Missing input file {input_file}")
+
+    print(f"Merged files saved to: {combined_file}")
+
+
+def run_filter(output, sample, db, threads):
+    filter_dir = os.path.join(output, "8.filter", sample)
+    input_fasta = os.path.join(output, "7.combine", sample, "virus_combine.fa")
+    if os.path.exists(filter_dir):
+        shutil.rmtree(filter_dir)
+    os.makedirs(filter_dir, exist_ok=True)
+
+    # Step 1: 运行CheckV初步筛选
+    cmd = f"""
+    checkv end_to_end {input_fasta} {filter_dir} \
+        -d {os.path.join(db, 'checkvdb/checkv-db-v1.0')} \
+        -t {threads}
+    """
+    try:
+        subprocess.run(cmd, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"CheckV failed: {e}")
+
+    # Step 2: 解析CheckV结果进行过滤
+    quality_summary_path = os.path.join(filter_dir, 'quality_summary.tsv')
+    if not os.path.exists(quality_summary_path):
+        sys.exit(f"CheckV quality summary file not found: {quality_summary_path}")
+
+    contigs_to_remove = []
+    with open(quality_summary_path, 'r') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        for row in reader:
+            try:
+                completeness_str = row['completeness'].strip()
+                # 处理 NA 值（替换为 0）
+                if completeness_str == 'NA':
+                    completeness_str = '0'
+                completeness = float(completeness_str)
+            except KeyError as e:
+                sys.exit(f"Missing required column in CheckV quality summary: {e}")
+            except ValueError as e:
+                sys.exit(f"Invalid value in CheckV quality summary: {e}")
+            # 应用过滤条件：completeness score < 50%
+            if completeness < 50:
+                contigs_to_remove.append(row['contig_id'])
+
+            # 定义读取fasta文件的辅助函数
+
+        def read_fasta(file_path):
+            contigs = {}
+            with open(file_path, 'r') as f:
+                header = ''
+                seq = []
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('>'):
+                        if header:
+                            contigs[header] = ''.join(seq)
+                            seq = []
+                        header = line[1:].split()[0]  # 提取contig ID（第一个字段）
+                    else:
+                        seq.append(line)
+                if header:  # 添加最后一个contig
+                    contigs[header] = ''.join(seq)
+            return contigs
+
+    # 读取原始fasta并过滤
+    contigs = read_fasta(input_fasta)
+    filtered_contigs = {k: v for k, v in contigs.items() if k not in contigs_to_remove}
+
+    # 写入过滤后的fasta文件
+    output_fasta = os.path.join(filter_dir, 'filtered_contigs.fa')
+    with open(output_fasta, 'w') as f:
+        for header, seq in filtered_contigs.items():
+            f.write(f'>{header}\n{seq}\n')
+    print(f"Filtered contigs saved to: {output_fasta}")
+
+
+def run_busco_filter(output, sample, db, threads):
+    busco_dir = os.path.join(output, "9.busco_filter", sample)
+    input_fasta = os.path.join(output, "8.filter", sample, "filtered_contigs.fa")
+
+    # 清理并创建目录
+    if os.path.exists(busco_dir):
+        shutil.rmtree(busco_dir)
+    os.makedirs(busco_dir, exist_ok=True)
+
+    # Step 1: 使用BUSCO
+    cmd = f"""
+    source activate /cpfs01/projects-HDD/cfff-47998b01bebd_HDD/rj_24212030018/miniconda3/envs/busco &&
+     busco -f -i {input_fasta} -c {threads} -o {busco_dir} -m geno -l {db}/bacteria_odb12 --offline
+     """
+    s1 = subprocess.call(cmd, shell=True)
+    if s1 != 0:
+        sys.exit(f"busco filter failed: {s1}")
+    # Step 2: 解析基因预测结果统计总基因数
+    predicted_file = os.path.join(busco_dir, r"prodigal_output/predicted_genes/predicted.fna")
+    # Count genes per contig
+    predicted_counts = {}
+    with open(predicted_file, 'r') as pf:
+        for line in pf:
+            if line.startswith('>'):
+                header = line[1:].split()[0]
+                contig = '_'.join(header.split('_')[:-1])  # contig = part before first underscore
+                predicted_counts[contig] = predicted_counts.get(contig, 0) + 1
+    if not predicted_counts:
+        sys.exit("Error: No predicted genes found in predicted.fna.")
+    print(f"Total contigs with predicted genes: {len(predicted_counts)}")
+    total_genes = sum(predicted_counts.values())
+    print(f"Total predicted genes: {total_genes}")
+    full_table = os.path.join(busco_dir, r"run_bacteria_odb12/full_table.tsv")
+    busco_counts = {}
+    with open(full_table, 'r') as ft:
+        reader = csv.reader(ft, delimiter='\t')
+        headers = next(reader, None)
+        for row in reader:
+            if len(row) < 3:
+                continue
+            status = row[1].strip()
+            if status in ("Complete", "Fragmented"):
+                seq_field = row[2]
+                # If sequence field includes "file:contig:start-end", extract contig
+                if ':' in seq_field:
+                    parts = seq_field.split(':')
+                    contig_name = parts[-2] if len(parts) >= 2 else parts[0]
+                else:
+                    contig_name = seq_field
+                contig_name = contig_name.split()[0]
+                busco_counts[contig_name] = busco_counts.get(contig_name, 0) + 1
+
+    total_busco_hits = sum(busco_counts.values()) if busco_counts else 0
+    print(f"Total BUSCO genes (Complete/Frag): {total_busco_hits}")
+    print(f"Contigs with BUSCO hits: {len(busco_counts)}")
+    contigs_to_remove = []
+    for contig, gene_count in predicted_counts.items():
+        if gene_count == 0:
+            continue
+        busco_genes = busco_counts.get(contig, 0)
+        ratio = busco_genes / gene_count
+        print(f"Contig {contig}: {busco_genes}/{gene_count} BUSCO genes (ratio {ratio:.2%})")
+        if ratio > 0.05:
+            contigs_to_remove.append(contig)
+    if contigs_to_remove:
+        print(f"Removing {len(contigs_to_remove)} contigs with BUSCO ratio > 5%: {contigs_to_remove}")
+    else:
+        print("No contigs exceed BUSCO ratio threshold (5%).")
+    input_fasta = os.path.join(output, "8.filter", sample, "filtered_contigs.fa")
+    output_fasta = os.path.join(busco_dir, "filtered_contigs.fa")
+    # Read input FASTA sequences
+    contig_seqs = {}
+    with open(input_fasta, 'r') as f:
+        header = None
+        seq_lines = []
+        for line in f:
+            line = line.strip()
+            if line.startswith('>'):
+                if header:
+                    contig_seqs[header] = ''.join(seq_lines)
+                header = line[1:].split()[0]
+                seq_lines = []
+            else:
+                seq_lines.append(line)
+        if header:
+            contig_seqs[header] = ''.join(seq_lines)
+
+    # Write filtered sequences
+    with open(output_fasta, 'w') as out:
+        for hdr, seq in contig_seqs.items():
+            if hdr not in contigs_to_remove:
+                out.write(f">{hdr}\n{seq}\n")
+
+    print(f"Filtered contigs saved to: {output_fasta}")

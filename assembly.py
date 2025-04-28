@@ -88,6 +88,24 @@ def main():
         with open(log_path, "w") as f:
             f.write(f"{log}\n")
 
+    if log < 7:
+        run_combine(output, sample, db, threads)
+        log = 7
+        with open(log_path, "w") as f:
+            f.write(f"{log}\n")
+
+    if log < 8:
+        run_filter(output, sample, db, threads)
+        log = 8
+        with open(log_path, "w") as f:
+            f.write(f"{log}\n")
+
+    if log < 9:
+        run_busco_filter(output, sample, db, threads)
+        log = 9
+        with open(log_path, "w") as f:
+            f.write(f"{log}\n")
+
     print("Pipeline completed successfully")
 
 
